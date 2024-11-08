@@ -1,0 +1,10 @@
+[configuration]
+entry_symbol = "gdext_rust_init"
+compatibility_minimum = 4.1
+reloadable = true
+
+[libraries]
+linux.debug.x86_64 = "res://rust/target/debug/libalchemy_game.so"
+linux.release.x86_64 = "res://rust/target/release/libalchemy_game.so"
+windows.debug.x86_64 = "res://rust/target/debug/alchemy_game.dll"
+windows.release.x86_64 = "res://rust/target/release/alchemy_game.dll"
