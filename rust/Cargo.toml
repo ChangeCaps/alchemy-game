@@ -8,4 +8,7 @@ publish = false
 crate-type = ["cdylib"]
 
 [dependencies]
+arrayvec = "0.7"
 godot = "0.1"
+rayon = "1"
+seahash = "4"
