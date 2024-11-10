@@ -38,14 +38,14 @@ pub struct Simulation {
 
     #[var]
     #[init(default = 0.0)]
-    pub boundary_density: f32,
+    pub boundary_force: f32,
 
     atoms: Vec<AtomData>,
     particles: Vec<Particle>,
     densities: Vec<f32>,
     pressures: Vec<Vector2>,
 
-    spatial_lut: Vec<u16>,
+    spatial_lut: Vec<[u16; 2]>,
     lut_indices: Vec<u16>,
 }
 
@@ -82,8 +82,23 @@ impl Simulation {
     }
 
     #[func]
+    fn get_particle(&self, index: i64) -> Gd<Particle> {
+        Gd::from_object(self.particles[index as usize])
+    }
+
+    #[func]
     fn particle_position(&self, index: i64) -> Vector2 {
         self.particles[index as usize].position
+    }
+
+    #[func]
+    fn particle_pressure(&self, index: i64) -> Vector2 {
+        self.pressures[index as usize]
+    }
+
+    #[func]
+    fn particle_density(&self, index: i64) -> f32 {
+        self.densities[index as usize]
     }
 
     #[func]
@@ -92,46 +107,51 @@ impl Simulation {
     }
 
     #[func]
+    fn particle_neighbors(&self, index: i64) -> Array<i64> {
+        self.particles_in_radius(self.particles[index as usize].position)
+            .map(|(i, _)| i as i64)
+            .collect()
+    }
+
+    #[func]
     fn step(&mut self, dt: f32) {
-        time!("update_spatial_lut", self.update_spatial_lut(dt));
-        time!("update_densities", self.update_densities(dt));
-        time!("update_pressures", self.update_pressures(dt));
-        time!("update_velocities", self.update_velocities(dt));
-        time!("update_positions", self.update_positions(dt));
-        time!("resolve_boundary", self.resolve_boundary());
+        self.update_spatial_lut(dt);
+        self.update_densities(dt);
+        self.update_pressures(dt);
+        self.update_velocities(dt);
+        self.update_positions(dt);
+        self.resolve_boundary();
     }
 
     fn update_spatial_lut(&mut self, dt: f32) {
-        self.spatial_lut.resize(self.particles.len(), 0);
+        self.spatial_lut.resize(self.particles.len(), [0; 2]);
         let mut spatial_lut = mem::take(&mut self.spatial_lut);
 
         spatial_lut.iter_mut().enumerate().for_each(|(i, hash)| {
             let p = &self.particles[i];
             let point = p.position + p.velocity * dt;
             let cell = self.compute_cell(point);
-            *hash = self.compute_cell_hash(cell);
+            *hash = [i as u16, self.compute_cell_hash(cell)];
         });
 
         self.spatial_lut = spatial_lut;
-        self.spatial_lut.sort_unstable();
+        self.spatial_lut.sort_unstable_by_key(|[_, hash]| *hash);
 
         self.lut_indices.resize(self.particles.len(), 0);
+        self.lut_indices.fill(u16::MAX);
 
-        if let Some(first) = self.spatial_lut.first() {
+        if let Some([_, first]) = self.spatial_lut.first() {
             self.lut_indices[*first as usize] = 0;
         }
 
         for i in 1..self.spatial_lut.len() {
-            let hash = self.spatial_lut[i];
-            let prev = self.spatial_lut[i - 1];
+            let [_, hash] = self.spatial_lut[i];
+            let [_, prev] = self.spatial_lut[i - 1];
 
             if hash != prev {
                 self.lut_indices[hash as usize] = i as u16;
             }
         }
-
-        godot_print!("spatial {:?}", self.spatial_lut);
-        godot_print!("indices {:?}", self.lut_indices);
     }
 
     fn update_densities(&mut self, dt: f32) {
@@ -139,8 +159,8 @@ impl Simulation {
         let mut densities = mem::take(&mut self.densities);
 
         self.particles
-            .iter()
-            .zip(densities.iter_mut())
+            .par_iter()
+            .zip(densities.par_iter_mut())
             .for_each(|(p, d)| {
                 let point = p.position + p.velocity * dt;
 
@@ -154,7 +174,7 @@ impl Simulation {
         self.pressures.resize(self.particles.len(), Vector2::ZERO);
         let mut pressures = mem::take(&mut self.pressures);
 
-        pressures.iter_mut().enumerate().for_each(|(i, pr)| {
+        pressures.par_iter_mut().enumerate().for_each(|(i, pr)| {
             *pr = self.compute_pressure(i, dt);
         });
 
@@ -166,6 +186,10 @@ impl Simulation {
             .par_iter_mut()
             .enumerate()
             .for_each(|(i, p)| {
+                if self.densities[i] == 0.0 {
+                    return;
+                }
+
                 let acceleration = self.pressures[i] / self.densities[i];
 
                 p.velocity += acceleration * dt;
@@ -210,6 +234,10 @@ impl Simulation {
                 let a_density = self.densities[index];
                 let b_density = self.densities[i];
 
+                if a_density == 0.0 || b_density == 0.0 {
+                    return Vector2::ZERO;
+                }
+
                 let a_pressure = self.density_to_pressure(a_density);
                 let b_pressure = self.density_to_pressure(b_density);
 
@@ -221,10 +249,6 @@ impl Simulation {
     }
 
     fn compute_density(&self, point: Vector2, dt: f32) -> f32 {
-        let boundary_distance = f32::max(0.0, self.smoothing_radius - point.length());
-        let boundary_density = Self::smooth_kernel(self.smoothing_radius, boundary_distance);
-        let boundary_density = boundary_density * self.boundary_density;
-
         self.particles_in_radius(point)
             .map(|(_, p)| {
                 let p_point = p.position + p.velocity * dt;
@@ -235,11 +259,10 @@ impl Simulation {
                 Self::smooth_kernel(self.smoothing_radius, distance) * atom.mass
             })
             .sum::<f32>()
-            + boundary_density
     }
 
     fn particles_in_radius(&self, point: Vector2) -> impl Iterator<Item = (usize, &Particle)> {
-        const NEIGHBORS: [Vector2i; 9] = [
+        const NEIGHBORS: &[Vector2i] = &[
             Vector2i::new(-1, -1),
             Vector2i::new(-1, 0),
             Vector2i::new(-1, 1),
@@ -253,19 +276,25 @@ impl Simulation {
 
         let cell = self.compute_cell(point);
 
-        NEIGHBORS.into_iter().flat_map(move |offset| {
-            let cell = cell + offset;
+        NEIGHBORS.iter().flat_map(move |offset| {
+            let cell = cell + *offset;
             let hash = self.compute_cell_hash(cell);
             let index = self.lut_indices[hash as usize] as usize;
 
-            self.spatial_lut[index..]
+            if index == u16::MAX as usize {
+                return None.into_iter().flatten();
+            }
+
+            let particles = self.spatial_lut[index..]
                 .iter()
-                .enumerate()
-                .take_while(move |(_, lut_hash)| **lut_hash == hash)
-                .map(move |(i, _)| {
-                    let particle = &self.particles[index + i];
-                    (index + i, particle)
-                })
+                .take_while(move |[_, lut_hash]| *lut_hash == hash)
+                .map(move |&[i, _]| {
+                    let particle = &self.particles[i as usize];
+
+                    (i as usize, particle)
+                });
+
+            Some(particles).into_iter().flatten()
         })
     }
 
@@ -285,7 +314,7 @@ impl Simulation {
 
         cell.hash(&mut hasher);
 
-        (hasher.finish() as usize % self.particles.len()) as u16
+        (hasher.finish() % self.particles.len() as u64) as u16
     }
 
     fn smooth_kernel(r: f32, d: f32) -> f32 {

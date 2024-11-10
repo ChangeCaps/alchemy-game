@@ -1,20 +1,27 @@
-[gd_scene load_steps=5 format=3 uid="uid://bxe3eyi1dkg7m"]
+[gd_scene load_steps=6 format=3 uid="uid://bxe3eyi1dkg7m"]
 
 [ext_resource type="Script" path="res://scenes/test_simulation.gd" id="1_fthov"]
 
 [sub_resource type="Atom" id="Atom_82n7t"]
 
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_y6cct"]
+vertex_color_use_as_albedo = true
+
 [sub_resource type="SphereMesh" id="SphereMesh_bp45q"]
+material = SubResource("StandardMaterial3D_y6cct")
 radius = 0.05
 height = 0.1
 
 [sub_resource type="MultiMesh" id="MultiMesh_1cfvx"]
 transform_format = 1
+use_colors = true
 mesh = SubResource("SphereMesh_bp45q")
 
 [node name="TestSimulation" type="Node3D"]
 script = ExtResource("1_fthov")
-smoothing_radius = 0.5
+pressure_multiplier = 25.0
+target_density = 5.0
+boundary_radius = 14.955
 atoms = Array[Atom]([SubResource("Atom_82n7t")])
 
 [node name="MultiMeshInstance3D" type="MultiMeshInstance3D" parent="."]
@@ -22,3 +29,6 @@ multimesh = SubResource("MultiMesh_1cfvx")
 
 [node name="Camera3D" type="Camera3D" parent="."]
 transform = Transform3D(1, 0, 0, 0, -4.37114e-08, 1, 0, -1, -4.37114e-08, 0, 13.0898, 0)
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 0.460339, 0.887743, 0, -0.887743, 0.460339, 0, 0, 0)
